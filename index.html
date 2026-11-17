@@ -1,0 +1,439 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRINCE SNAKE MULTIPLAYER</title>
+
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+ background:radial-gradient(circle at top,#142b37,#050a12 65%);
+ color:white;font-family:Arial,sans-serif;
+ min-height:100vh;text-align:center;padding:20px;
+}
+h1{
+ color:#00ff99;font-size:clamp(25px,5vw,42px);
+ text-shadow:0 0 20px #00ff99;margin:15px;
+}
+.subtitle{color:#9ab7bd;margin-bottom:20px}
+.panel{
+ max-width:750px;margin:15px auto;padding:20px;
+ background:#101d29;border:1px solid #244451;
+ border-radius:18px;box-shadow:0 0 25px #00ff9915;
+}
+input{
+ width:100%;padding:14px;border-radius:10px;
+ border:1px solid #00ff99;background:#07121b;
+ color:white;font-size:18px;text-align:center;margin:8px 0;
+}
+button{
+ padding:13px 20px;border:0;border-radius:10px;
+ background:#00e68a;color:#00140d;font-weight:bold;
+ cursor:pointer;font-size:15px;margin:5px;
+}
+button:hover{background:#72ffc1;transform:scale(1.03)}
+button:disabled{opacity:.5;cursor:not-allowed}
+#status{color:#ffcf5a;margin:12px;font-weight:bold}
+#room{color:#00ff99;font-size:25px;letter-spacing:5px}
+.scoreboard{
+ display:flex;justify-content:space-around;gap:10px;
+ margin:15px auto;max-width:700px;flex-wrap:wrap;
+}
+.score{
+ background:#10212d;padding:15px 25px;border-radius:12px;
+ border:1px solid #31505d;min-width:130px;
+}
+.score strong{display:block;font-size:25px;margin-top:6px}
+canvas{
+ width:min(100%,700px);height:auto;
+ background:#07131b;border:2px solid #00ff99;
+ border-radius:12px;box-shadow:0 0 25px #00ff9930;
+ display:block;margin:15px auto;
+}
+.controls{display:flex;justify-content:center;gap:8px;flex-wrap:wrap}
+.controls button{width:65px;height:55px;font-size:22px}
+.small{color:#91aab4;font-size:13px;line-height:1.8}
+#result{font-size:24px;color:#00ff99;margin:12px}
+.hidden{display:none}
+</style>
+</head>
+
+<body>
+
+<h1>🐍 PRINCE SNAKE</h1>
+<p class="subtitle">ONLINE MULTIPLAYER ARENA</p>
+
+<div class="panel" id="lobby">
+ <h2>🌐 Multiplayer Lobby</h2>
+ <p style="margin:15px">Create a room or join your friend's room.</p>
+
+ <button onclick="createRoom()">CREATE ROOM</button>
+
+ <div style="margin:15px;color:#9ab7bd">— OR JOIN ROOM —</div>
+
+ <input id="roomInput" maxlength="6" placeholder="ENTER 6 DIGIT ROOM ID">
+ <button onclick="joinRoom()">JOIN GAME</button>
+
+ <div id="status">Waiting for connection...</div>
+ <div id="room"></div>
+ <p class="small">Share your Room ID with your friend.</p>
+</div>
+
+<div class="scoreboard">
+ <div class="score">
+  PLAYER 1 🟢
+  <strong id="score1">0</strong>
+ </div>
+ <div class="score">
+  PLAYER 2 🔵
+  <strong id="score2">0</strong>
+ </div>
+</div>
+
+<div class="panel">
+ <div id="result">Waiting for players...</div>
+ <canvas id="game" width="600" height="400"></canvas>
+ <p class="small">Player 1: Arrow Keys | Player 2: WASD</p>
+ <p class="small" id="gameStatus">Connect two players to start.</p>
+
+ <div class="controls">
+  <button onclick="move('up')">▲</button>
+  <button onclick="move('left')">◀</button>
+  <button onclick="move('down')">▼</button>
+  <button onclick="move('right')">▶</button>
+ </div>
+
+ <button onclick="restartGame()" id="restart" disabled>🔄 RESTART GAME</button>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+const CELL=20,COLS=30,ROWS=20;
+let peer=null,conn=null;
+let isHost=false,connected=false;
+let player=0,game=null;
+let loop=null;
+
+const directions={
+ up:{x:0,y:-1},
+ down:{x:0,y:1},
+ left:{x:-1,y:0},
+ right:{x:1,y:0}
+};
+
+function setStatus(text){
+ document.getElementById("status").textContent=text;
+}
+
+function randomRoom(){
+ return String(Math.floor(100000+Math.random()*900000));
+}
+
+function createRoom(){
+ if(peer)return;
+ isHost=true;
+ player=1;
+ setStatus("Creating room...");
+ const id=randomRoom();
+ peer=new Peer(id);
+
+ peer.on("open",()=>{
+  document.getElementById("room").textContent="ROOM: "+id;
+  setStatus("Room created! Waiting for Player 2...");
+  gameStatus("Share your room ID with your friend.");
+ });
+
+ peer.on("connection",c=>{
+  if(conn){c.close();return;}
+  conn=c;
+  setupConnection();
+ });
+
+ peer.on("error",e=>{
+  setStatus("Connection error: "+e.type);
+  peer=null;
+ });
+}
+
+function joinRoom(){
+ if(peer)return;
+ const id=document.getElementById("roomInput").value.trim();
+ if(!/^\d{6}$/.test(id)){
+  setStatus("Please enter a valid 6-digit Room ID!");
+  return;
+ }
+
+ isHost=false;
+ player=2;
+ setStatus("Connecting to room...");
+
+ peer=new Peer();
+
+ peer.on("open",()=>{
+  conn=peer.connect(id,{reliable:true});
+  setupConnection();
+ });
+
+ peer.on("error",e=>{
+  setStatus("Connection failed. Check Room ID.");
+  peer=null;
+ });
+}
+
+function setupConnection(){
+ if(!conn)return;
+
+ conn.on("open",()=>{
+  connected=true;
+  document.getElementById("lobby").classList.add("hidden");
+  document.getElementById("restart").disabled=false;
+  setStatus("Connected!");
+  gameStatus("Both players connected. Game started!");
+
+  if(isHost){
+   newGame();
+   sendState();
+  }
+ });
+
+ conn.on("data",data=>{
+  if(isHost){
+   if(data.type==="direction"){
+    setDirection(2,data.direction);
+   }
+   if(data.type==="restart" && game && game.over){
+    newGame();
+    sendState();
+   }
+  }else{
+   if(data.type==="state"){
+    game=data.state;
+    draw();
+    updateScores();
+   }
+  }
+ });
+
+ conn.on("close",()=>{
+  connected=false;
+  stopLoop();
+  gameStatus("Other player disconnected.");
+ });
+}
+
+function send(data){
+ if(conn && conn.open)conn.send(data);
+}
+
+function newGame(){
+ game={
+  snakes:[
+   {body:[{x:5,y:10},{x:4,y:10},{x:3,y:10}],
+    dir:"right",next:"right",score:0,alive:true},
+   {body:[{x:24,y:10},{x:25,y:10},{x:26,y:10}],
+    dir:"left",next:"left",score:0,alive:true}
+  ],
+  food:makeFood(),
+  over:false,
+  winner:""
+ };
+ document.getElementById("result").textContent="";
+ updateScores();
+ draw();
+ startLoop();
+}
+
+function makeFood(){
+ return {
+  x:Math.floor(Math.random()*COLS),
+  y:Math.floor(Math.random()*ROWS)
+ };
+}
+
+function setDirection(p,d){
+ if(!directions[d] || !game || game.over)return;
+ const s=game.snakes[p-1];
+ const current=directions[s.dir];
+ const next=directions[d];
+
+ if(current.x+next.x===0 && current.y+next.y===0)return;
+ s.next=d;
+}
+
+function move(d){
+ if(!game || game.over)return;
+ if(player===1 && isHost)setDirection(1,d);
+ else if(player===2)send({type:"direction",direction:d});
+}
+
+document.addEventListener("keydown",e=>{
+ const k=e.key.toLowerCase();
+ const map={
+  arrowup:"up",arrowdown:"down",
+  arrowleft:"left",arrowright:"right",
+  w:"up",s:"down",a:"left",d:"right"
+ };
+ if(map[k]){
+  e.preventDefault();
+  move(map[k]);
+ }
+});
+
+function startLoop(){
+ stopLoop();
+ loop=setInterval(()=>{
+  if(!isHost || !game || game.over)return;
+  updateGame();
+  sendState();
+ },125);
+}
+
+function stopLoop(){
+ if(loop){clearInterval(loop);loop=null;}
+}
+
+function updateGame(){
+ const snakes=game.snakes;
+ let positions=[];
+
+ snakes.forEach((s,i)=>{
+  if(!s.alive)return;
+  const dir=directions[s.next];
+  s.dir=s.next;
+
+  const head={
+   x:s.body[0].x+dir.x,
+   y:s.body[0].y+dir.y
+  };
+
+  const eating=head.x===game.food.x && head.y===game.food.y;
+  let bodies=[
+   ...snakes[0].body.slice(0,snakes[0].body.length-(i===0 && !eating?1:0)),
+   ...snakes[1].body.slice(0,snakes[1].body.length-(i===1 && !eating?1:0))
+  ];
+
+  const wall=head.x<0 || head.x>=COLS ||
+             head.y<0 || head.y>=ROWS;
+
+  const hit=bodies.some((b,j)=>{
+   if(i===0 && j===0)return false;
+   if(i===1 && j===snakes[0].body.length-1 && !eating)return false;
+   return b.x===head.x && b.y===head.y;
+  });
+
+  positions.push({head,eating,wall,hit});
+ });
+
+ // Move both snakes together.
+ snakes.forEach((s,i)=>{
+  if(!s.alive)return;
+  const p=positions[i];
+  if(!p)return;
+
+  if(p.wall || p.hit){
+   s.alive=false;
+   return;
+  }
+
+  s.body.unshift(p.head);
+  if(p.eating){
+   s.score+=10;
+   game.food=makeFood();
+  }else{
+   s.body.pop();
+  }
+ });
+
+ // Check snake-to-snake head collisions.
+ const h1=snakes[0].body[0],h2=snakes[1].body[0];
+ if(snakes[0].alive && snakes[1].alive &&
+    h1.x===h2.x && h1.y===h2.y){
+  snakes[0].alive=false;
+  snakes[1].alive=false;
+ }
+
+ if(!snakes[0].alive || !snakes[1].alive){
+  game.over=true;
+  const a=snakes[0].alive,b=snakes[1].alive;
+  game.winner=a?"PLAYER 1 WINS!":b?"PLAYER 2 WINS!":"DRAW!";
+  document.getElementById("result").textContent=game.winner;
+  stopLoop();
+ }
+ draw();
+ updateScores();
+}
+
+function sendState(){
+ send({type:"state",state:game});
+}
+
+function restartGame(){
+ if(!connected)return;
+ if(isHost){
+  newGame();
+  sendState();
+ }else{
+  send({type:"restart"});
+ }
+}
+
+function updateScores(){
+ if(!game)return;
+ document.getElementById("score1").textContent=game.snakes[0].score;
+ document.getElementById("score2").textContent=game.snakes[1].score;
+}
+
+function gameStatus(text){
+ document.getElementById("gameStatus").textContent=text;
+}
+
+function draw(){
+ ctx.clearRect(0,0,600,400);
+
+ // Grid
+ ctx.strokeStyle="#17313b";
+ ctx.lineWidth=.5;
+ for(let x=0;x<=600;x+=CELL){
+  ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,400);ctx.stroke();
+ }
+ for(let y=0;y<=400;y+=CELL){
+  ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(600,y);ctx.stroke();
+ }
+
+ if(!game)return;
+
+ // Food
+ ctx.shadowBlur=18;
+ ctx.shadowColor="#ff3b65";
+ ctx.fillStyle="#ff3b65";
+ ctx.beginPath();
+ ctx.arc(game.food.x*CELL+10,game.food.y*CELL+10,7,0,Math.PI*2);
+ ctx.fill();
+ ctx.shadowBlur=0;
+
+ const colors=["#00ff88","#24aaff"];
+
+ game.snakes.forEach((s,i)=>{
+  s.body.forEach((p,j)=>{
+   ctx.shadowBlur=j===0?18:8;
+   ctx.shadowColor=colors[i];
+   ctx.fillStyle=j===0? "#ffffff":colors[i];
+   ctx.beginPath();
+   ctx.roundRect(p.x*CELL+2,p.y*CELL+2,16,16,5);
+   ctx.fill();
+  });
+ });
+ ctx.shadowBlur=0;
+}
+
+draw();
+</script>
+</body>
+</html>
+
